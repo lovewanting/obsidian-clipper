@@ -286,7 +286,7 @@
 		"message": "以私密且持久的格式保存网页内容，可离线访问。Obsidian 官方浏览器扩展。"
 	},
 	"extensionName": {
-		"message": "Obsidian 网页剪藏器"
+		"message": "Obsidian 网页剪藏器 (Dev)"
 	},
 	"failedToCopyText": {
 		"message": "复制文本失败"

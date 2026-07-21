@@ -3,6 +3,7 @@ import browser from './browser-polyfill';
 import { detectBrowser } from './browser-detection';
 import { flattenShadowDom as flattenShadowDomUtil } from './flatten-shadow-dom';
 import { getLocalStorage, setLocalStorage } from './storage-utils';
+import { preprocessCarousels } from './carousel-utils';
 import hljs from 'highlight.js';
 import { getDomain } from './string-utils';
 import type { HighlighterAPI } from './highlighter';
@@ -871,6 +872,7 @@ export class Reader {
 			return pre;
 		}
 
+		preprocessCarousels(doc);
 		const defuddle = new Defuddle(doc, { url: doc.URL });
 		const defuddled = await defuddle.parseAsync();
 

@@ -12,6 +12,7 @@ import { saveFile } from './utils/file-utils';
 import { debugLog } from './utils/debug';
 import { updateSidebarWidth, addResizeHandle, cleanupResizeHandlers } from './utils/iframe-resize';
 import { parseForClip } from './utils/clip-utils';
+import { preprocessCarousels } from './utils/carousel-utils';
 
 declare global {
 	interface Window {
@@ -210,6 +211,10 @@ declare global {
 					div.appendChild(clonedSelection);
 					selectedHtml = serializeChildren(div);
 				}
+
+				// Preprocess carousels before Defuddle extraction to preserve
+				// hidden slide images that would otherwise be stripped.
+				preprocessCarousels(document);
 
 				// Use parseAsync to ensure async variables like {{transcript}} are available.
 				// If it hangs (e.g. another extension has corrupted fetch), fall back to sync parse.
