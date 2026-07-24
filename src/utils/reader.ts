@@ -4,6 +4,7 @@ import { detectBrowser } from './browser-detection';
 import { flattenShadowDom as flattenShadowDomUtil } from './flatten-shadow-dom';
 import { getLocalStorage, setLocalStorage } from './storage-utils';
 import { preprocessCarousels } from './carousel-utils';
+import { preprocessWechatMath, restoreWechatMathInMarkdown, WechatMathFormulaMap } from './wechat-math-utils';
 import hljs from 'highlight.js';
 import { getDomain } from './string-utils';
 import type { HighlighterAPI } from './highlighter';
@@ -48,6 +49,7 @@ interface ReaderContent {
 	wordCount?: number;
 	parseTime?: number;
 	extractorType?: string;
+	wechatMathFormulas?: WechatMathFormulaMap;
 }
 
 export class Reader {
@@ -72,6 +74,7 @@ export class Reader {
 		wordCount?: number;
 		parseTime?: number;
 		extractorType?: string;
+		wechatMathFormulas?: WechatMathFormulaMap;
 	} | null = null;
 
 	/**
@@ -873,6 +876,7 @@ export class Reader {
 		}
 
 		preprocessCarousels(doc);
+		const wechatMathFormulas = preprocessWechatMath(doc);
 		const defuddle = new Defuddle(doc, { url: doc.URL });
 		const defuddled = await defuddle.parseAsync();
 
@@ -883,7 +887,8 @@ export class Reader {
 			published: defuddled.published,
 			domain: getDomain(doc.URL),
 			wordCount: defuddled.wordCount,
-			parseTime: defuddled.parseTime
+			parseTime: defuddled.parseTime,
+			wechatMathFormulas,
 		};
 	}
 
@@ -2249,7 +2254,7 @@ export class Reader {
 			}
 
 			// Now await content extraction and populate the page
-			const { content, title, author, published, domain, extractorType, wordCount, parseTime } = await contentPromise;
+			const { content, title, author, published, domain, extractorType, wordCount, parseTime, wechatMathFormulas } = await contentPromise;
 
 			// If reader was toggled off while waiting, abort
 			if (!this.isActive) return;
@@ -2263,7 +2268,7 @@ export class Reader {
 				return;
 			}
 
-			this.populateArticle(doc, main, article, { content, title, author, published, domain, wordCount, parseTime });
+			this.populateArticle(doc, main, article, { content, title, author, published, domain, wordCount, parseTime, wechatMathFormulas });
 
 			// Use the Defuddle-extracted title (article title only) instead of
 			// document.title (which often includes the site name suffix).
@@ -2344,6 +2349,12 @@ export class Reader {
 			// Store original article HTML before wireTranscript modifies
 			// the DOM (moves timestamps, wraps text, adds scrub track).
 			this.storeOriginalHtml(article);
+
+			// Persist the WeChat math formula map so copy/save actions can
+			// restore placeholders even after the initial extraction cache expires.
+			if (wechatMathFormulas && Object.keys(wechatMathFormulas).length > 0) {
+				article.setAttribute('data-wechat-math', JSON.stringify(wechatMathFormulas));
+			}
 
 			wireTranscript(doc, article, this.settings, {
 				getStickyOffset: () => this.getStickyOffset(),
@@ -2717,6 +2728,11 @@ export class Reader {
 
 		this.storeOriginalHtml(article);
 
+		// Persist the WeChat math formula map for copy/save actions.
+		if (content.wechatMathFormulas && Object.keys(content.wechatMathFormulas).length > 0) {
+			article.setAttribute('data-wechat-math', JSON.stringify(content.wechatMathFormulas));
+		}
+
 		wireTranscript(doc, article, this.settings, {
 			getStickyOffset: () => this.getStickyOffset(),
 			scrollTo: (y) => this.scrollTo(y),
@@ -2778,8 +2794,9 @@ export class Reader {
 
 	static copyMarkdownOnReaderPage(doc: Document): void {
 		try {
-			const defuddled = parseForClip(doc);
-			const markdown = createMarkdownContent(defuddled.content, doc.URL);
+			const { defuddle: defuddled, wechatMathFormulas } = parseForClip(doc);
+			let markdown = createMarkdownContent(defuddled.content, doc.URL);
+			markdown = restoreWechatMathInMarkdown(markdown, wechatMathFormulas);
 			navigator.clipboard.writeText(markdown).catch(() => {
 				const textArea = doc.createElement('textarea');
 				textArea.value = markdown;
@@ -2795,8 +2812,9 @@ export class Reader {
 
 	static async saveMarkdownOnReaderPage(doc: Document): Promise<void> {
 		try {
-			const defuddled = parseForClip(doc);
-			const markdown = createMarkdownContent(defuddled.content, doc.URL);
+			const { defuddle: defuddled, wechatMathFormulas } = parseForClip(doc);
+			let markdown = createMarkdownContent(defuddled.content, doc.URL);
+			markdown = restoreWechatMathInMarkdown(markdown, wechatMathFormulas);
 			const title = defuddled.title || doc.title || 'Untitled';
 			const fileName = title.replace(/[/\\?%*:|"<>]/g, '-');
 			await saveFile({ content: markdown, fileName, mimeType: 'text/markdown' });

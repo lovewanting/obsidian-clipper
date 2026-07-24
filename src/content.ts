@@ -13,6 +13,7 @@ import { debugLog } from './utils/debug';
 import { updateSidebarWidth, addResizeHandle, cleanupResizeHandlers } from './utils/iframe-resize';
 import { parseForClip } from './utils/clip-utils';
 import { preprocessCarousels } from './utils/carousel-utils';
+import { preprocessWechatMath, restoreWechatMathInMarkdown, WechatMathFormulaMap } from './utils/wechat-math-utils';
 
 declare global {
 	interface Window {
@@ -107,6 +108,7 @@ declare global {
 		wordCount: number;
 		language: string;
 		metaTags: { name?: string | null; property?: string | null; content: string | null }[];
+		wechatMathFormulas?: WechatMathFormulaMap;
 	}
 
 	browser.runtime.onMessage.addListener((request: any, sender, sendResponse) => {
@@ -154,10 +156,11 @@ declare global {
 		if (request.action === "copyMarkdownToClipboard") {
 			flattenShadowDom(document).then(() => {
 				try {
-					const defuddled = parseForClip(document);
+					const { defuddle: defuddled, wechatMathFormulas } = parseForClip(document);
 
-					// Convert HTML content to markdown
-					const markdown = createMarkdownContent(defuddled.content, document.URL);
+					// Convert HTML content to markdown, then restore WeChat math
+					let markdown = createMarkdownContent(defuddled.content, document.URL);
+					markdown = restoreWechatMathInMarkdown(markdown, wechatMathFormulas);
 
 					// Copy to clipboard
 					const textArea = document.createElement("textarea");
@@ -179,8 +182,9 @@ declare global {
 		if (request.action === "saveMarkdownToFile") {
 			flattenShadowDom(document).then(async () => {
 				try {
-					const defuddled = parseForClip(document);
-					const markdown = createMarkdownContent(defuddled.content, document.URL);
+					const { defuddle: defuddled, wechatMathFormulas } = parseForClip(document);
+					let markdown = createMarkdownContent(defuddled.content, document.URL);
+					markdown = restoreWechatMathInMarkdown(markdown, wechatMathFormulas);
 					const title = defuddled.title || document.title || 'Untitled';
 					const fileName = title.replace(/[/\\?%*:|"<>]/g, '-');
 					await saveFile({
@@ -216,6 +220,11 @@ declare global {
 				// hidden slide images that would otherwise be stripped.
 				preprocessCarousels(document);
 
+				// Preprocess WeChat math formulas before Defuddle so they survive
+				// content scoring. The formulaMap is passed to the popup for
+				// restoration after markdown conversion.
+				const wechatMathFormulas = preprocessWechatMath(document);
+
 				// Use parseAsync to ensure async variables like {{transcript}} are available.
 				// If it hangs (e.g. another extension has corrupted fetch), fall back to sync parse.
 				const defuddle = new Defuddle(document, { url: document.URL });
@@ -224,6 +233,7 @@ declare global {
 				);
 				const defuddled = await Promise.race([defuddle.parseAsync(), parseTimeout])
 					.catch(() => defuddle.parse());
+
 				const extractedContent: { [key: string]: string } = {
 					...defuddled.variables,
 				};
@@ -288,7 +298,8 @@ declare global {
 					site: defuddled.site,
 					title: defuddled.title,
 					wordCount: defuddled.wordCount,
-					metaTags: defuddled.metaTags || []
+					metaTags: defuddled.metaTags || [],
+					wechatMathFormulas
 				};
 				if (defuddled.title) {
 					highlighter.setPageTitle(defuddled.title);

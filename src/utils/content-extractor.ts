@@ -12,6 +12,7 @@ import {
 	wrapElementWithMark,
 	wrapTextWithMark
 } from './dom-utils';
+import { restoreWechatMathInMarkdown, WechatMathFormulaMap } from './wechat-math-utils';
 
 // Define ElementHighlightData type inline since it's not exported from highlighter.ts
 interface ElementHighlightData extends HighlightData {
@@ -62,6 +63,7 @@ interface ContentResponse {
 	wordCount: number;
 	language: string;
 	metaTags: { name?: string | null; property?: string | null; content: string | null }[];
+	wechatMathFormulas?: WechatMathFormulaMap;
 }
 
 async function sendExtractRequest(tabId: number): Promise<ContentResponse> {
@@ -141,7 +143,8 @@ export async function initializePageContent(
 	site: string,
 	wordCount: number,
 	language: string,
-	metaTags: { name?: string | null; property?: string | null; content: string | null }[]
+	metaTags: { name?: string | null; property?: string | null; content: string | null }[],
+	wechatMathFormulas?: WechatMathFormulaMap
 ) {
 	try {
 		currentUrl = currentUrl.replace(/#:~:text=[^&]+(&|$)/, '');
@@ -157,7 +160,10 @@ export async function initializePageContent(
 			content = processHighlights(content, highlights);
 		}
 
-		const markdownBody = createMarkdownContent(content, currentUrl);
+		let markdownBody = createMarkdownContent(content, currentUrl);
+
+		// Restore WeChat math formula placeholders in the final markdown
+		markdownBody = restoreWechatMathInMarkdown(markdownBody, wechatMathFormulas ?? {});
 
 		const highlightsData = collapseGroupsForExport(highlights, c => createMarkdownContent(c, currentUrl));
 

@@ -10,6 +10,7 @@ import { throttle } from '../utils/throttle';
 import { loadSettings } from '../utils/storage-utils';
 import Defuddle from 'defuddle';
 import { preprocessCarousels } from '../utils/carousel-utils';
+import { preprocessWechatMath } from '../utils/wechat-math-utils';
 
 type MessageListener = (request: any, sender: any, sendResponse: (response?: any) => void) => true | undefined;
 let readerPageMessageListener: MessageListener | null = null;
@@ -49,6 +50,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 		Object.defineProperty(parsedDoc, 'URL', { value: url, configurable: true });
 
 		preprocessCarousels(parsedDoc);
+		const wechatMathFormulas = preprocessWechatMath(parsedDoc);
 		const defuddle = new Defuddle(parsedDoc, { url, fetch: proxyFetchAsResponse });
 		const result = await defuddle.parseAsync();
 
@@ -64,6 +66,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 			domain: getDomain(url),
 			wordCount: result.wordCount,
 			parseTime: result.parseTime,
+			wechatMathFormulas,
 		};
 
 		Reader.isReaderPage = true;
@@ -100,7 +103,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 		updatePageDomainSettings({ site: result.site, favicon: result.favicon });
 		if (result.favicon) setFavicon(result.favicon, url);
 
-		setupReaderPageMessageHandler(url, result);
+		setupReaderPageMessageHandler(url, result, wechatMathFormulas);
 
 		window.addEventListener('resize', throttle(() => repositionHighlights(), 100));
 
@@ -222,6 +225,7 @@ async function loadArticle(newUrl: string) {
 		Object.defineProperty(parsedDoc, 'URL', { value: newUrl, configurable: true });
 
 		preprocessCarousels(parsedDoc);
+		const wechatMathFormulas = preprocessWechatMath(parsedDoc);
 		const defuddle = new Defuddle(parsedDoc, { url: newUrl, fetch: proxyFetchAsResponse });
 		const result = await defuddle.parseAsync();
 
@@ -247,9 +251,10 @@ async function loadArticle(newUrl: string) {
 			domain: getDomain(newUrl),
 			wordCount: result.wordCount,
 			parseTime: result.parseTime,
+			wechatMathFormulas,
 		});
 
-		setupReaderPageMessageHandler(newUrl, result);
+		setupReaderPageMessageHandler(newUrl, result, wechatMathFormulas);
 	} catch (error) {
 		console.error('Failed to navigate:', error);
 	}
@@ -356,7 +361,7 @@ async function applyReaderTheme() {
 
 // Handle messages from the clipper iframe via the background's
 // extensionPageMessage forwarding (content scripts can't run on extension pages).
-async function setupReaderPageMessageHandler(articleUrl: string, defuddleResult: any) {
+async function setupReaderPageMessageHandler(articleUrl: string, defuddleResult: any, wechatMathFormulas?: Record<string, { latex: string; isBlock: boolean }>) {
 	const currentTab = await browser.tabs.getCurrent();
 	const myTabId = currentTab?.id;
 
@@ -378,6 +383,7 @@ async function setupReaderPageMessageHandler(articleUrl: string, defuddleResult:
 		site: defuddleResult.site || '',
 		wordCount: defuddleResult.wordCount || 0,
 		metaTags: defuddleResult.metaTags || [],
+		wechatMathFormulas: wechatMathFormulas ?? {},
 	};
 
 	if (readerPageMessageListener) {

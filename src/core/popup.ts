@@ -719,7 +719,8 @@ async function refreshFields(tabId: number, { checkTemplateTriggers = true, rebu
 				extractedData.site,
 				extractedData.wordCount,
 				extractedData.language || '',
-				extractedData.metaTags
+				extractedData.metaTags,
+				extractedData.wechatMathFormulas
 			);
 			if (initializedContent) {
 				currentVariables = initializedContent.currentVariables;
