@@ -9,6 +9,7 @@ import { setPageUrl, setPageTitle, updatePageDomainSettings, getHighlights, repo
 import { throttle } from '../utils/throttle';
 import { loadSettings } from '../utils/storage-utils';
 import Defuddle from 'defuddle';
+import { preprocessCarousels } from '../utils/carousel-utils';
 
 type MessageListener = (request: any, sender: any, sendResponse: (response?: any) => void) => true | undefined;
 let readerPageMessageListener: MessageListener | null = null;
@@ -47,6 +48,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 		const parsedDoc = parser.parseFromString(html, 'text/html');
 		Object.defineProperty(parsedDoc, 'URL', { value: url, configurable: true });
 
+		preprocessCarousels(parsedDoc);
 		const defuddle = new Defuddle(parsedDoc, { url, fetch: proxyFetchAsResponse });
 		const result = await defuddle.parseAsync();
 
@@ -219,6 +221,7 @@ async function loadArticle(newUrl: string) {
 		const parsedDoc = parser.parseFromString(html, 'text/html');
 		Object.defineProperty(parsedDoc, 'URL', { value: newUrl, configurable: true });
 
+		preprocessCarousels(parsedDoc);
 		const defuddle = new Defuddle(parsedDoc, { url: newUrl, fetch: proxyFetchAsResponse });
 		const result = await defuddle.parseAsync();
 

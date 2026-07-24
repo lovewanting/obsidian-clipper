@@ -220,3 +220,294 @@ describe('preprocessCarousels — WeChat carousel', () => {
 		expect(allImages.filter(src => src === orig).length).toBe(1);
 	});
 });
+
+/**
+ * Helper: build a WeChat image-share article DOM (page_share_img).
+ * This is a special article type where the entire content is carousel images.
+ */
+function buildWeChatImageArticle(imageCount: number = 5) {
+	const originals: string[] = [];
+	const thumbnails: string[] = [];
+
+	for (let i = 1; i <= imageCount; i++) {
+		originals.push(`https://mmbiz.qpic.cn/sz_mmbiz_png/article_img${i}/0?wx_fmt=png&from=appmsg`);
+		thumbnails.push(`https://mmbiz.qpic.cn/mmbiz_png/article_img${i}/0?wxfrom=12&wx_fmt=png&tp=webp&watermark=1`);
+	}
+
+	// First swiper (in header) has 1 preview item
+	const previewItem = `
+		<div class="swiper_item" data-status="1">
+			<div class="swiper_item_img">
+				<img src="${thumbnails[0]}" style="width:100%">
+			</div>
+		</div>`;
+
+	// Second swiper has all items with data-src originals
+	const mainItems = originals.map((orig, i) => `
+		<div class="swiper_item" data-src="${orig}" data-status="1">
+			<div class="swiper_item_img">
+				<img src="${thumbnails[i]}" style="width:100%">
+			</div>
+		</div>`).join('');
+
+	document.body.className = 'page_share_img pages_skin_default';
+	document.body.innerHTML = `
+		<div id="js_article" class="share_content_page">
+			<div id="js_share_content_page_hd" class="share_content_page_hd">
+				<div class="img_swiper_area">
+					<div class="share_media_swiper_wrp">
+						<div id="img_swiper" class="share_media_swiper">
+							<div class="share_media_swiper_content">
+								<div class="share_media">
+									${previewItem}
+								</div>
+							</div>
+						</div>
+						<div class="share_media_swiper">
+							<div class="share_media_swiper_content">
+								<div class="share_media">
+									${mainItems}
+								</div>
+							</div>
+						</div>
+						<ol class="swiper_indicator_list_pc">
+							${thumbnails.map(t => `<li class="swiper_indicator_item_pc" style="background-image:url(${t})"></li>`).join('')}
+						</ol>
+					</div>
+				</div>
+			</div>
+			<div id="js_base_container" class="share_content_page_bd">
+				<div id="js_content_container" class="rich_media_area">
+					<div id="js_article_content" class="rich_media_area_primary">
+						<div class="rich_media_area_primary_inner">
+							<div id="js_content">
+								<div id="js_image_content" class="image_content">
+									<h1 class="rich_media_title no_desc_title">Web开发者又多了个提效神器</h1>
+									<div class="rich_media_meta_list image_rich_media_meta_list">
+										<span>北京</span>
+										<span>5月2日 08:55</span>
+									</div>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	`;
+}
+
+describe('preprocessCarousels — WeChat image-share article (page_share_img)', () => {
+	test('detects page_share_img and replaces body with clean article', () => {
+		buildWeChatImageArticle(5);
+		preprocessCarousels(document);
+
+		const article = document.body.querySelector('article');
+		expect(article).not.toBeNull();
+		expect(article!.id).toBe('js_content');
+		expect(article!.getAttribute('class')).toBe('rich_media_content');
+	});
+
+	test('extracts all original carousel images (not thumbnails)', () => {
+		buildWeChatImageArticle(5);
+		preprocessCarousels(document);
+
+		const article = document.body.querySelector('article');
+		const wrapper = article!.querySelector('[data-defuddle-carousel]');
+		expect(wrapper).not.toBeNull();
+
+		const images = Array.from(wrapper!.querySelectorAll('img'))
+			.map(img => img.getAttribute('src') || '');
+
+		expect(images.length).toBe(5);
+		for (const src of images) {
+			expect(src).toContain('sz_mmbiz_png');
+			expect(src).not.toContain('watermark');
+		}
+	});
+
+	test('includes title in the article', () => {
+		buildWeChatImageArticle(5);
+		preprocessCarousels(document);
+
+		const h1 = document.body.querySelector('article h1');
+		expect(h1).not.toBeNull();
+		expect(h1!.textContent).toBe('Web开发者又多了个提效神器');
+	});
+
+	test('includes metadata text for Defuddle scoring', () => {
+		buildWeChatImageArticle(5);
+		preprocessCarousels(document);
+
+		const article = document.body.querySelector('article');
+		const p = article!.querySelector('p');
+		expect(p).not.toBeNull();
+		expect(p!.textContent).toContain('北京');
+		expect(p!.textContent).toContain('5月2日');
+	});
+
+	test('removes all original page elements', () => {
+		buildWeChatImageArticle(5);
+		preprocessCarousels(document);
+
+		expect(document.querySelector('#js_article')).toBeNull();
+		expect(document.querySelector('#js_share_content_page_hd')).toBeNull();
+		expect(document.querySelector('#js_base_container')).toBeNull();
+		expect(document.querySelector('.share_media_swiper')).toBeNull();
+
+		expect(document.body.children.length).toBe(1);
+		expect(document.body.firstElementChild!.tagName).toBe('ARTICLE');
+	});
+
+	test('does not trigger for normal articles', () => {
+		buildWeChatCarousel(3);
+		document.body.className = 'rich_media';
+
+		preprocessCarousels(document);
+
+		const article = document.body.querySelector('article');
+		expect(article).toBeNull();
+		expect(document.querySelector('#js_content')).not.toBeNull();
+		expect(document.querySelector('[data-defuddle-carousel]')).not.toBeNull();
+	});
+});
+
+/**
+ * Helper: build a WeChat image-share article DOM (page_share_img) WITH description text.
+ * This variant has #js_image_desc containing article summary/description,
+ * similar to real articles like the "motion-anything" post.
+ */
+function buildWeChatImageArticleWithDesc(imageCount: number = 9) {
+	const originals: string[] = [];
+	const thumbnails: string[] = [];
+
+	for (let i = 1; i <= imageCount; i++) {
+		originals.push(`https://mmbiz.qpic.cn/sz_mmbiz_png/desc_img${i}/0?wx_fmt=png&from=appmsg`);
+		thumbnails.push(`https://mmbiz.qpic.cn/mmbiz_png/desc_img${i}/0?wxfrom=12&wx_fmt=png&tp=webp&watermark=1`);
+	}
+
+	const previewItem = `
+		<div class="swiper_item" data-status="1">
+			<div class="swiper_item_img">
+				<img src="${thumbnails[0]}" style="width:100%">
+			</div>
+		</div>`;
+
+	const mainItems = originals.map((orig, i) => `
+		<div class="swiper_item" data-src="${orig}" data-status="1">
+			<div class="swiper_item_img">
+				<img src="${thumbnails[i]}" style="width:100%">
+			</div>
+		</div>`).join('');
+
+	document.body.className = 'page_share_img pages_skin_default';
+	document.body.innerHTML = `
+		<div id="js_article" class="share_content_page">
+			<div id="js_share_content_page_hd" class="share_content_page_hd">
+				<div class="img_swiper_area">
+					<div class="share_media_swiper_wrp">
+						<div id="img_swiper" class="share_media_swiper">
+							<div class="share_media_swiper_content">
+								<div class="share_media">
+									${previewItem}
+								</div>
+							</div>
+						</div>
+						<div class="share_media_swiper">
+							<div class="share_media_swiper_content">
+								<div class="share_media">
+									${mainItems}
+								</div>
+							</div>
+						</div>
+						<ol class="swiper_indicator_list_pc">
+							${thumbnails.map(t => `<li class="swiper_indicator_item_pc" style="background-image:url(${t})"></li>`).join('')}
+						</ol>
+					</div>
+				</div>
+			</div>
+			<div id="js_base_container" class="share_content_page_bd">
+				<div id="js_content_container" class="rich_media_area">
+					<div id="js_article_content" class="rich_media_area_primary">
+						<div class="rich_media_area_primary_inner">
+							<div id="js_content">
+								<div id="js_image_content" class="image_content">
+									<h1 class="rich_media_title">motion-anything正式开源：免费Figma Moti</h1>
+									<p id="js_image_desc" class="share_notice js_underline_content">motion-anything 的重点不是“又一个动效工具”，而是把动效放回真实网页里：你看到的是 HTML + CSS + JavaScript，能运行、能部署、还能回来继续逐组件编辑。<br><br>它自带 403 个策展动效配方、230 套 Skills、59 套设计系统、58 套 HyperFrames 视频模板、2680 枚图标。<br><br><span class="wx_english_text_left">GitHub 地址：https://github.com/nexu-io/motion-anything</span></p>
+									<div class="rich_media_meta_list image_rich_media_meta_list">
+										<span>广东</span>
+										<span>7月12日 15:38</span>
+									</div>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	`;
+}
+
+describe('preprocessCarousels — WeChat image-share article with description', () => {
+	test('extracts #js_image_desc text as paragraphs', () => {
+		buildWeChatImageArticleWithDesc(9);
+		preprocessCarousels(document);
+
+		const article = document.body.querySelector('article');
+		expect(article).not.toBeNull();
+
+		const paragraphs = Array.from(article!.querySelectorAll('p'));
+		const texts = paragraphs.map(p => p.textContent || '');
+
+		// Should contain the description paragraphs
+		expect(texts.some(t => t.includes('motion-anything 的重点不是'))).toBe(true);
+		expect(texts.some(t => t.includes('403 个策展动效配方'))).toBe(true);
+		expect(texts.some(t => t.includes('GitHub 地址'))).toBe(true);
+	});
+
+	test('splits <br><br> into separate paragraphs', () => {
+		buildWeChatImageArticleWithDesc(9);
+		preprocessCarousels(document);
+
+		const article = document.body.querySelector('article');
+		const paragraphs = Array.from(article!.querySelectorAll('p'));
+
+		// The description has 3 text segments separated by <br><br>
+		// Plus the metadata paragraph — so at least 4 <p> elements
+		expect(paragraphs.length).toBeGreaterThanOrEqual(4);
+	});
+
+	test('still extracts all carousel images', () => {
+		buildWeChatImageArticleWithDesc(9);
+		preprocessCarousels(document);
+
+		const article = document.body.querySelector('article');
+		const wrapper = article!.querySelector('[data-defuddle-carousel]');
+		expect(wrapper).not.toBeNull();
+
+		const images = Array.from(wrapper!.querySelectorAll('img'))
+			.map(img => img.getAttribute('src') || '');
+
+		expect(images.length).toBe(9);
+		for (const src of images) {
+			expect(src).toContain('sz_mmbiz_png');
+		}
+	});
+
+	test('includes title, description, and metadata in correct order', () => {
+		buildWeChatImageArticleWithDesc(9);
+		preprocessCarousels(document);
+
+		const article = document.body.querySelector('article')!;
+		const children = Array.from(article.children);
+
+		// Order: h1 (title) → p* (description) → div (images) → p (metadata)
+		expect(children[0].tagName).toBe('H1');
+		expect(children[0].textContent).toBe('motion-anything正式开源：免费Figma Moti');
+
+		// Last element should be metadata
+		const lastChild = children[children.length - 1];
+		expect(lastChild.tagName).toBe('P');
+		expect(lastChild.textContent).toContain('广东');
+	});
+});

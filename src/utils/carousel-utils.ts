@@ -80,12 +80,31 @@ const ARTICLE_BODY_SELECTORS = [
 	'article',                        // HTML5 semantic
 ];
 
+// Selectors that are valid article bodies even when they have little/no text.
+// This handles image-only articles (e.g. WeChat "图片消息" / page_share_img)
+// where the article body container is empty and all content lives in a carousel.
+const IMAGE_ARTICLE_SELECTORS = [
+	'#js_content',                    // WeChat (may be empty for image articles)
+	'#js_image_content',              // WeChat image articles
+	'.rich_media_content',            // WeChat rich media
+];
+
 /**
  * Find the most likely article body container.
  * Uses a combination of known selectors and text-density heuristics.
  */
 function findArticleBody(doc: Document, carouselRoot: Element): Element | null {
-	// First try known selectors
+	// First: check image-article selectors — these are valid even when empty
+	// (e.g. WeChat "图片消息" articles where #js_content has no text)
+	for (const selector of IMAGE_ARTICLE_SELECTORS) {
+		const candidate = doc.querySelector(selector);
+		if (candidate && candidate !== carouselRoot && !carouselRoot.contains(candidate)) {
+			debugLog('Carousel', `Found image article body via selector: ${selector}`);
+			return candidate;
+		}
+	}
+
+	// Second: try known selectors requiring text content
 	for (const selector of ARTICLE_BODY_SELECTORS) {
 		const candidate = doc.querySelector(selector);
 		if (candidate && candidate !== carouselRoot && !carouselRoot.contains(candidate)) {
@@ -363,11 +382,157 @@ function replaceCarouselWithImages(
 }
 
 /**
+ * Handle WeChat image-share articles (page_share_img).
+ *
+ * These articles have NO text body — the entire content is a set of
+ * full-page images in a carousel located in #js_share_content_page_hd,
+ * which is a SIBLING of #js_content (not inside it).
+ *
+ * The standard carousel relocation approach fails here because:
+ * 1. #js_content has very little text (~126 chars)
+ * 2. Defuddle's content scoring requires text density and rejects
+ *    image-only containers
+ * 3. Other page elements (nav, sidebar, footer) may score higher
+ *
+ * Solution: replace the entire body with a clean article structure
+ * containing the carousel images and title, so Defuddle has no
+ * competing elements and must extract our content.
+ */
+function preprocessWeChatImageArticle(doc: Document): boolean {
+	const body = doc.body;
+	if (!body) return false;
+
+	// Detect WeChat image-share article by body class
+	const bodyClass = body.getAttribute('class') || '';
+	if (!bodyClass.includes('page_share_img')) return false;
+
+	debugLog('Carousel', 'Detected WeChat image-share article (page_share_img)');
+
+	// Find the main carousel area in the page header
+	const shareHd = doc.querySelector('#js_share_content_page_hd');
+	if (!shareHd) {
+		debugLog('Carousel', 'No #js_share_content_page_hd found');
+		return false;
+	}
+
+	// Collect carousel images from the header area.
+	// Skip single-item preview swipers — only collect from swipers with 2+ items.
+	const swipers = shareHd.querySelectorAll('.share_media_swiper');
+	const imageUrls: string[] = [];
+	const seenUrls = new Set<string>();
+
+	for (const swiper of Array.from(swipers)) {
+		const itemCount = swiper.querySelectorAll('.swiper_item').length;
+		if (itemCount < 2) continue; // Skip preview swipers
+
+		const urls = collectImageUrls(swiper);
+		for (const url of urls) {
+			const normalized = url.split('?')[0].split('#')[0];
+			if (!seenUrls.has(normalized)) {
+				seenUrls.add(normalized);
+				imageUrls.push(url);
+			}
+		}
+	}
+
+	if (imageUrls.length === 0) {
+		debugLog('Carousel', 'No carousel images found in image-share article');
+		return false;
+	}
+
+	// Extract title
+	const titleEl = doc.querySelector('.rich_media_title');
+	const title = titleEl?.textContent?.trim() || '';
+
+	// Extract description text from #js_image_desc (present in image articles
+	// that have a text summary alongside the carousel images).
+	// This element contains <br><br> paragraph separators and inline <span> links.
+	const jsImageDescEl = doc.querySelector('#js_image_desc');
+	const descParagraphs: string[] = [];
+	if (jsImageDescEl) {
+		// Split by <br> elements to create proper paragraphs
+		const fragments: string[] = [];
+		let currentFragment = '';
+		for (const node of Array.from(jsImageDescEl.childNodes)) {
+			if (node.nodeType === 1 && (node as Element).tagName === 'BR') {
+				if (currentFragment.trim()) {
+					fragments.push(currentFragment.trim());
+				}
+				currentFragment = '';
+			} else {
+				currentFragment += node.textContent || '';
+			}
+		}
+		if (currentFragment.trim()) {
+			fragments.push(currentFragment.trim());
+		}
+		// Filter out empty fragments (from consecutive <br><br>)
+		descParagraphs.push(...fragments.filter(f => f.length > 0));
+	}
+
+	// Extract metadata (author, location, date) from #js_image_content
+	const jsImageContent = doc.querySelector('#js_image_content');
+	const metaList = jsImageContent?.querySelector('.rich_media_meta_list');
+	const metaText = metaList?.textContent?.trim() || '';
+
+	// Build a clean article structure that Defuddle will reliably extract
+	const article = doc.createElement('article');
+	article.id = 'js_content';
+	article.setAttribute('class', 'rich_media_content');
+
+	if (title) {
+		const h1 = doc.createElement('h1');
+		h1.textContent = title;
+		article.appendChild(h1);
+	}
+
+	// Add description paragraphs (the main text content of the article)
+	for (const para of descParagraphs) {
+		const p = doc.createElement('p');
+		p.textContent = para;
+		article.appendChild(p);
+	}
+
+	// Add images
+	const imgWrapper = doc.createElement('div');
+	imgWrapper.setAttribute('data-defuddle-carousel', 'true');
+	for (const url of imageUrls) {
+		const img = doc.createElement('img');
+		img.setAttribute('src', url);
+		imgWrapper.appendChild(img);
+	}
+	article.appendChild(imgWrapper);
+
+	// Add metadata as text for Defuddle scoring
+	if (metaText) {
+		const metaP = doc.createElement('p');
+		metaP.textContent = metaText;
+		article.appendChild(metaP);
+	}
+
+	// Replace entire body content with our clean article
+	while (body.firstChild) body.removeChild(body.firstChild);
+	body.appendChild(article);
+
+	debugLog('Carousel', `Image-share article: extracted ${imageUrls.length} images, title: "${title}", desc paragraphs: ${descParagraphs.length}`);
+	return true;
+}
+
+/**
  * Main entry point: preprocess all carousel elements in the document
  * before passing it to Defuddle for content extraction.
  */
 export function preprocessCarousels(doc: Document): void {
 	const startTime = Date.now();
+
+	// Handle WeChat image-share articles first — these require a completely
+	// different approach because the content IS the carousel (no text body).
+	if (preprocessWeChatImageArticle(doc)) {
+		const elapsed = Date.now() - startTime;
+		debugLog('Carousel', `Preprocessed image-share article in ${elapsed}ms`);
+		return;
+	}
+
 	const roots = findCarouselRoots(doc);
 
 	if (roots.length === 0) {
@@ -420,8 +585,22 @@ export function preprocessCarousels(doc: Document): void {
 	// "page header" section (#js_share_content_page_hd) that is a sibling
 	// of the article body (#js_content).
 	for (const { wrapper, sourceRoot } of replacements) {
-		const articleBody = findArticleBody(doc, sourceRoot);
-		if (articleBody && !articleBody.contains(wrapper)) {
+		let articleBody = findArticleBody(doc, sourceRoot);
+
+		// Fallback: if no article body found, create a container so Defuddle
+		// can still extract the carousel images as main content.
+		if (!articleBody) {
+			articleBody = doc.createElement('div');
+			articleBody.id = 'js_content';
+			articleBody.setAttribute('class', 'rich_media_content');
+			articleBody.setAttribute('style', 'display: block;');
+
+			const articleContainer = doc.querySelector('#js_article') || doc.querySelector('#js_article_wrap') || doc.body;
+			articleContainer.appendChild(articleBody);
+			debugLog('Carousel', 'Created fallback article body for carousel images');
+		}
+
+		if (!articleBody.contains(wrapper)) {
 			debugLog('Carousel', 'Relocating carousel images into article body');
 			articleBody.insertBefore(wrapper, articleBody.firstChild);
 		}
